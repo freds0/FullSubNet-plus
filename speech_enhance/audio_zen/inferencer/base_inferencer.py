@@ -60,12 +60,35 @@ class BaseInferencer:
             toml.dump(config, handle)
 
     @staticmethod
+    def _collate_fn(batch):
+        # batch is a list of tuples (noisy_y, basename)
+        noisy_ys, basenames = zip(*batch)
+        
+        # Convert to tensors
+        noisy_ys = [torch.from_numpy(ny) for ny in noisy_ys]
+        basenames = list(basenames)
+        
+        # Save original lengths before padding
+        lengths = [len(ny) for ny in noisy_ys]
+        
+        # Pad batches with zeros to have the same length
+        max_length = max(lengths)
+        noisy_ys_padded = [torch.nn.functional.pad(ny, (0, max_length - len(ny))) for ny in noisy_ys]
+        
+        # Stack tensors into a single batch tensor
+        noisy_ys_tensor = torch.stack(noisy_ys_padded)
+        
+        return noisy_ys_tensor, basenames, lengths
+    
+    @staticmethod
     def _load_dataloader(dataset_config):
         dataset = initialize_module(dataset_config["path"], args=dataset_config["args"], initialize=True)
         dataloader = DataLoader(
             dataset=dataset,
-            batch_size=1,
+            batch_size=dataset_config["batch_size"],
             num_workers=0,
+            shuffle=False, 
+            collate_fn=BaseInferencer._collate_fn            
         )
         return dataloader
 
@@ -133,28 +156,35 @@ class BaseInferencer:
     @torch.no_grad()
     def __call__(self):
         inference_type = self.inference_config["type"]
-        assert inference_type in dir(self), f"Not implemented Inferencer type: {inference_type}"
+        assert inference_type in self.__dir__(), f"Not implemented Inferencer type: {inference_type}"
 
         inference_args = self.inference_config["args"]
 
-        for noisy, name in tqdm(self.dataloader, desc="Inference"):
-            assert len(name) == 1, "The batch size of inference stage must 1."
-            name = name[0]
-
-            t1 = time.time()
-            enhanced = getattr(self, inference_type)(noisy.to(self.device), inference_args)
-            t2 = time.time()
-
-            if (abs(enhanced) > 1).any():
+        # Auxiliary function for processing and writing the file
+        def process_and_write_audio(enhanced, name, samplerate, original_length):
+            if (np.abs(enhanced) > 1).any():
                 print(f"Warning: enhanced is not in the range [-1, 1], {name}")
-
+            # Crop the sample back to its original size
+            enhanced = enhanced[:original_length]                
             amp = np.iinfo(np.int16).max
             enhanced = np.int16(0.8 * amp * enhanced / np.max(np.abs(enhanced)))
+            sf.write(self.enhanced_dir / f"{name}.wav", enhanced, samplerate=samplerate)
 
-            # cal rtf
-            rtf = (t2 - t1) / (len(enhanced) * 1.0 / self.acoustic_config["sr"])
-            print(f"{name}, rtf: {rtf}")
+        for noisy_batch, name_batch, lengths in tqdm(self.dataloader, desc="Inference"):
+            assert len(noisy_batch) == len(name_batch), "Batch sizes must match."
 
-            # clnsp102_traffic_248091_3_snr0_tl-21_fileid_268 => clean_fileid_0
-            # name = "clean_" + "_".join(name.split("_")[-2:])
-            sf.write(self.enhanced_dir / f"{name}.wav", enhanced, samplerate=self.acoustic_config["sr"])
+            t1 = time.time()
+            enhanced_batch = getattr(self, inference_type)(noisy_batch.to(self.device), inference_args)
+            t2 = time.time()
+
+            # Calculate RTF
+            rtf = (t2 - t1) / (len(enhanced_batch) * 1.0 / self.acoustic_config["sr"])
+            print(f"rtf: {rtf}")
+
+            if enhanced_batch.ndim > 1:
+                for index, (noisy, name, enhanced) in enumerate(zip(noisy_batch, name_batch, enhanced_batch)):
+                    original_length = lengths[index]  # Get the original length for cutting
+                    process_and_write_audio(enhanced, name, self.acoustic_config["sr"], original_length)
+            else:
+                assert len(name_batch) == 1, "The batch size of inference stage must be 1."
+                process_and_write_audio(enhanced_batch, name_batch[0], self.acoustic_config["sr"])

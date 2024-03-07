@@ -1,29 +1,24 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
+# Check if exactly one argument (the input folder) is passed
+if [ "$#" -ne 1 ]; then
+    echo "Usage: $0 <input_folder>"
+    exit 1
+fi
 
+# Store the argument (input folder path) in a variable
+INPUT_FOLDER=$1
+OUTPUT_FOLDER="enhanced_samples"
 
-# do enhance(denoise)
-CUDA_VISIBLE_DEVICES='0' /usr/bin/python3 -m speech_enhance.tools.inference \
+# Echoing the input folder to let the user know which folder is being used
+echo "Using input folder: $INPUT_FOLDER"
+
+# Execute the inference command with the provided input folder
+python -m speech_enhance.tools.inference \
   -C config/inference.toml \
-  -M /workspace/project-nas-11025-sh/speech_enhance/egs/DNS-master/s1_16k/logs/Complex_amp_input_allattention_DeepTCNFCFullSubNet/train_amp_attention_complex_fullsubnet/checkpoints/best_model.tar \
-  -I /workspace/project-nas-11025-sh/speech_enhance/data/DNS-Challenge/DNS-Challenge-interspeech2020-master/datasets/test_set/synthetic/with_reverb/noisy \
-  -O /workspace/project-nas-11025-sh/speech_enhance/case/with_reverb/fullsubnet+
+  -M checkpoints/best_model.tar \
+  -I "${INPUT_FOLDER}" \
+  -O "${OUTPUT_FOLDER}"
 
-
-# Normalized to -6dB (optional)
-sdir="/workspace/project-nas-11025-sh/speech_enhance/case/with_reverb/fullsubnet/enhanced_0073"
-fdir="/workspace/project-nas-11025-sh/speech_enhance/case/with_reverb/fullsubnet/fullsubnet_norm"
-
-softfiles=$(find $sdir -name "*.wav")
-for file in ${softfiles}
-do 
-  length=${#sdir}+1
-  file=${file:$length}
-  f=$sdir/$file
-  echo $f
-  dstfile=$fdir/$file
-  echo $dstfile
-  sox $f -b16 $dstfile rate -v -b 99.7 16k norm -6
-done
-
-
+# Optionally, echo a message after successful execution
+echo "Inference completed. Outputs are saved in '${OUTPUT_FOLDER}' directory."

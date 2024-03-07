@@ -141,8 +141,8 @@ class Inferencer(BaseInferencer):
     def mag_complex_full_band_crm_mask(self, noisy, inference_args):
         noisy_complex = self.torch_stft(noisy)
         noisy_mag, _ = mag_phase(noisy_complex)
-
-        noisy_mag = noisy_mag.unsqueeze(1)
+        # [B, F, T] => [B, 1, F, T] => model => [B, 2, F, T] => [B, F, T, 2]
+        noisy_mag = noisy_mag.unsqueeze(1)     
         noisy_real = (noisy_complex.real).unsqueeze(1)
         noisy_imag = (noisy_complex.imag).unsqueeze(1)
 
@@ -154,7 +154,9 @@ class Inferencer(BaseInferencer):
         pred_crm = decompress_cIRM(pred_crm)
         enhanced_real = pred_crm[..., 0] * noisy_complex.real - pred_crm[..., 1] * noisy_complex.imag
         enhanced_imag = pred_crm[..., 1] * noisy_complex.real + pred_crm[..., 0] * noisy_complex.imag
-        enhanced_complex = torch.stack((enhanced_real, enhanced_imag), dim=-1)
+        # old code: enhanced_complex = torch.stack((enhanced_real, enhanced_imag), dim=-1)
+        # Combine the real and imaginary parts to form a complex tensor
+        enhanced_complex = torch.complex(enhanced_real, enhanced_imag)
         enhanced = self.torch_istft(enhanced_complex, length=noisy.size(-1))
         enhanced = enhanced.detach().squeeze(0).cpu().numpy()
 
